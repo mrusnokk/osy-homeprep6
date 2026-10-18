@@ -206,9 +206,17 @@ void serve_player(int cl)
     close(cl);
 }
 
-constexpr int PORT = 8080;
-int main()
+int main(int argc, char *argv[])
 {
+
+    if (argc < 2)
+    {
+        printf("Zadej port!\n");
+        return -1;
+    }
+
+    int PORT = atoi(argv[1]);
+
     srand(time(nullptr));
     signal(SIGCHLD, SIG_IGN);
     int soc;
@@ -272,7 +280,7 @@ int main()
                     perror("accept");
                     continue;
                 }
-
+                printf("client pripojen!\n");
                 pid_t p;
 
                 if ((p = fork()) < 0)
