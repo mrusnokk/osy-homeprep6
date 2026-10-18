@@ -224,6 +224,7 @@ int main()
     srv_addr.sin_addr = addr_any;
 
     int opt = 1;
+
     if (setsockopt(soc, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
     {
         fprintf(stdout, "Nepodariolo se nastavit socopts!\n");
