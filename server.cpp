@@ -8,12 +8,146 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <iostream>
+#include <ctime>
+
+#define STR_CLOSE "close"
+#define STR_QUIT "quit"
+
+void serve_player(int cl)
+{
+    char buffer[1024];
+    char name[64];
+    bool registered = false;
+    int x = rand() % 10;
+    int y = rand() % 10;
+    char response[256];
+    while (1)
+    {
+        ssize_t bytes = read(cl, buffer, sizeof(buffer) - 1);
+
+        if (bytes <= 0)
+        {
+            if (bytes < 0)
+                perror("read");
+
+            break;
+        }
+
+        buffer[bytes] = '\0';
+
+        buffer[strcspn(buffer, "\r\n")] = '\0';
+
+        std::cout << "Klient poslal: " << buffer << std::endl;
+
+        if (strncmp(buffer, "HELLO ", 6) == 0)
+        {
+            if (registered)
+            {
+                snprintf(response, sizeof(response),
+                         "ERROR Already registered\n");
+            }
+            else if (buffer[6] == '\0')
+            {
+                snprintf(response, sizeof(response),
+                         "ERROR Missing name\n");
+            }
+            else
+            {
+                snprintf(name, sizeof(name), "%s", buffer + 6);
+                registered = true;
+
+                snprintf(response, sizeof(response),
+                         "WELCOME %s\n", name);
+            }
+        }
+        else if (strcmp(buffer, "QUIT") == 0)
+        {
+            snprintf(response, sizeof(response), "BYE\n");
+        }
+        else if (strcmp(buffer, "WHERE") == 0)
+        {
+            if (!registered)
+            {
+                snprintf(response, sizeof(response),
+                         "ERROR Please register first\n");
+            }
+            else
+            {
+                snprintf(response, sizeof(response),
+                         "POS %d %d\n", x, y);
+            }
+        }
+        else if (strncmp(buffer, "MOVE ", 5) == 0)
+        {
+            if (!registered)
+            {
+                snprintf(response, sizeof(response),
+                         "ERROR Please register first\n");
+            }
+            else
+            {
+                int new_x = x;
+                int new_y = y;
+                bool valid = true;
+
+                const char *direction = buffer + 5;
+
+                if (strcmp(direction, "NORTH") == 0)
+                    new_y--;
+                else if (strcmp(direction, "SOUTH") == 0)
+                    new_y++;
+                else if (strcmp(direction, "WEST") == 0)
+                    new_x--;
+                else if (strcmp(direction, "EAST") == 0)
+                    new_x++;
+                else
+                    valid = false;
+
+                if (!valid)
+                {
+                    snprintf(response, sizeof(response),
+                             "ERROR Invalid direction\n");
+                }
+                else if (new_x < 0 || new_x > 9 ||
+                         new_y < 0 || new_y > 9)
+                {
+                    snprintf(response, sizeof(response),
+                             "ERROR Out of bounds\n");
+                }
+                else
+                {
+                    x = new_x;
+                    y = new_y;
+
+                    snprintf(response, sizeof(response),
+                             "POS %d %d\n", x, y);
+                }
+            }
+        }
+        else
+        {
+            snprintf(response, sizeof(response),
+                     "ERROR Unknown command\n");
+        }
+
+        if (write(cl, response, strlen(response)) < 0)
+        {
+            perror("write");
+            break;
+        }
+        if (strcmp(buffer, "QUIT") == 0)
+            break;
+    }
+
+    close(cl);
+}
 
 constexpr int PORT = 8080;
 int main()
 {
+    srand(time(nullptr));
     int soc;
-    if ((soc = socket(AF_INET, SOCK_STREAM, 0) < 0))
+    if ((soc = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
         exit(EXIT_FAILURE);
     }
@@ -46,16 +180,54 @@ int main()
     while (1)
     {
         int cl = -1;
-        pollfd read_poll[2];
+        pollfd read_poll{};
 
-        read_poll[0].fd = STDIN_FILENO;
-        read_poll[0].events = POLLIN;
-        read_poll[1].fd = soc;
-        read_poll[1].events = POLLIN;
+        read_poll.fd = soc;
+        read_poll.events = POLLIN;
 
         while (1)
         {
-            int l_poll = poll(read_poll, 2, -1)
+            int l_poll = poll(&read_poll, 1, -1);
+
+            if (l_poll < 0)
+            {
+                if (errno == EINTR)
+                    continue;
+
+                perror("poll");
+                break;
+            }
+            if (read_poll.revents & POLLIN)
+            {
+                cl = accept(soc, nullptr, nullptr);
+
+                if (cl < 0)
+                {
+                    perror("accept");
+                    continue;
+                }
+
+                pid_t p;
+
+                if ((p = fork()) < 0)
+                {
+                    close(cl);
+                    exit(EXIT_FAILURE);
+                }
+                if (p == 0)
+                {
+
+                    close(soc);
+
+                    serve_player(cl);
+
+                    printf("Obsluhuju clienta!\n");
+                }
+                else
+                {
+                    close(cl);
+                }
+            }
         }
     }
 
