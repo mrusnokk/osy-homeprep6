@@ -9,6 +9,8 @@
 #include <arpa/inet.h>
 #include <iostream>
 #include <ctime>
+#include <csignal>
+#include <sys/wait.h>
 
 #define STR_CLOSE "close"
 #define STR_QUIT "quit"
@@ -16,13 +18,44 @@
 void serve_player(int cl)
 {
     char buffer[1024];
-    char name[64];
+    char name[64] = "";
     bool registered = false;
+    srand(time(nullptr) ^ getpid());
     int x = rand() % 10;
     int y = rand() % 10;
     char response[256];
+    pollfd pfd{};
+    pfd.fd = cl;
+    pfd.events = POLLIN;
+
     while (1)
     {
+        pfd.revents = 0;
+        int pr = poll(&pfd, 1, -1);
+
+        if (pr < 0)
+        {
+            if (errno == EINTR)
+                continue;
+
+            perror("poll");
+            break;
+        }
+
+        if (pr == 0)
+        {
+            const char *msg = "ERROR Timeout, disconnecting\n";
+            if (write(cl, msg, strlen(msg)) < 0)
+                perror("write");
+            break;
+        }
+
+        if (pfd.revents & (POLLERR | POLLNVAL))
+        {
+            fprintf(stderr, "Chyba na socketu klienta\n");
+            break;
+        }
+
         ssize_t bytes = read(cl, buffer, sizeof(buffer) - 1);
 
         if (bytes <= 0)
@@ -32,12 +65,9 @@ void serve_player(int cl)
 
             break;
         }
-
         buffer[bytes] = '\0';
 
         buffer[strcspn(buffer, "\r\n")] = '\0';
-
-        std::cout << "Klient poslal: " << buffer << std::endl;
 
         if (strncmp(buffer, "HELLO ", 6) == 0)
         {
@@ -57,12 +87,12 @@ void serve_player(int cl)
                 registered = true;
 
                 snprintf(response, sizeof(response),
-                         "WELCOME %s\n", name);
+                         "WELCOME %s (%d, %d)\n", name, x, y);
             }
         }
         else if (strcmp(buffer, "QUIT") == 0)
         {
-            snprintf(response, sizeof(response), "BYE\n");
+            snprintf(response, sizeof(response), "BYE %s\n", name);
         }
         else if (strcmp(buffer, "WHERE") == 0)
         {
@@ -124,6 +154,40 @@ void serve_player(int cl)
                 }
             }
         }
+        else if (strncmp(buffer, "INFO ", 5) == 0)
+        {
+            if (!registered)
+            {
+                snprintf(response, sizeof(response), "ERROR Please register first\n");
+            }
+            else if (buffer[5] == '\0')
+            {
+                snprintf(response, sizeof(response), "Error Missing Animal name!\n");
+            }
+            else
+            {
+                pid_t pol;
+                if ((pol = fork()) < 0)
+                {
+                    snprintf(response, sizeof(response), "Error : Nevim uz!\n");
+                }
+                else if (pol == 0)
+                {
+                    dup2(cl, STDOUT_FILENO);
+                    close(cl);
+                    execlp("./zoo_info", "zoo_info", buffer + 5, nullptr);
+
+                    perror("execl");
+                    _exit(127);
+                }
+                else
+                {
+                    int status;
+                    waitpid(pol, &status, 0);
+                    continue;
+                }
+            }
+        }
         else
         {
             snprintf(response, sizeof(response),
@@ -146,6 +210,7 @@ constexpr int PORT = 8080;
 int main()
 {
     srand(time(nullptr));
+    signal(SIGCHLD, SIG_IGN);
     int soc;
     if ((soc = socket(AF_INET, SOCK_STREAM, 0)) < 0)
     {
@@ -216,12 +281,10 @@ int main()
                 }
                 if (p == 0)
                 {
-
                     close(soc);
 
                     serve_player(cl);
-
-                    printf("Obsluhuju clienta!\n");
+                    _exit(EXIT_SUCCESS);
                 }
                 else
                 {
